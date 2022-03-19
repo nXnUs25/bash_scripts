@@ -1,0 +1,90 @@
+#!/bin/bash
+
+## author: Augustyn Chmiel
+## e-mail: augustyc@ie.ibm.com
+
+USER='wasadm'
+WAS_PWD='Just4Now'
+
+CHECK_ONLY=${1:-1}      ### 0 disabled - do all ; 1 enabled preform only checks
+
+LOGFILE='/var/log/harden_was_protocals.log'
+
+/usr/bin/touch ${LOGFILE}
+exec > >( /bin/sed "s/^/$(/bin/date '+[%F %T]'): /" | /usr/bin/tee -a ${LOGFILE}) 2>&1
+
+regex='^-?[0-9]+([.][0-9]+)?$'
+if ! [[ ${ACTION} =~ ${regex} ]] ; then
+        echo "error: Not a number: [${ACTION}]"
+        /bin/echo -e "Usage: ./harden_was_protocals [option]\n       ./harden_was_protocals 0"
+        /bin/echo -e "0 - check mode disabled - do all [checks and changes]\n1 - checks enabled, preforming only checks"
+        exit 1
+fi
+
+/bin/echo ''                                              
+/bin/echo "Starting checks: "$(/bin/date "+%Y%m%d-%H%M%S")
+
+if [[ ! -f '/opt/IBM/WebSphere/AppServer/bin/wsadmin.sh' ]];
+then
+	/bin/echo "Looks like WebSphere Server Application it is not configured on that server, EXITING !!!"
+	exit 0
+fi
+
+WAS="/opt/IBM/WebSphere/AppServer/bin/wsadmin.sh -lang jython -user ${USER} -password ${WAS_PWD} -c"
+
+if [[ ${CHECK_ONLY} -eq 0 ]];
+then
+        /bin/echo "Script will apply changes to meeet ITCS104 standards [changing the OS configuration]"
+else
+        /bin/echo "Script will run verification for settings only [no changes to the system]"
+fi
+
+/bin/echo ''
+/bin/echo 'Checking IPv4 and IPv6 java custom properties'
+/bin/echo ''
+
+ip4=$(${WAS} "print AdminTask.showJVMSystemProperties('-propertyName java.net.preferIPv4Stack')" | /usr/bin/tail -1)
+ip6=$(${WAS} "print AdminTask.showJVMSystemProperties('-propertyName java.net.preferIPv6Addresses')" | /usr/bin/tail -1)
+
+echo "test $ip4:$ip6"
+if [[ ${ip4} == 'true' ]];
+then
+	/bin/echo "JVM property to force WebSphere Application Server to use an IPv4 socket to communicate is set."
+	/bin/echo "[java.net.preferIPv4Stack = true] for using IPv4"
+else
+	/bin/echo "[java.net.preferIPv4Stack] for using IPv4 not set"
+	if [[ ${CHECK_ONLY} -eq 0 ]];
+	then
+		/bin/echo 'Setting IPv4 JVM property'
+		${WAS} "AdminTask.setJVMSystemProperties('[-propertyName java.net.preferIPv4Stack -propertyValue true]')"
+		${WAS} "AdminConfig.save()"	
+	else
+		/bin/echo "To force IPv4 [java.net.preferIPv4Stack = true] should be set"
+	fi
+fi
+
+if [[ ${ip6} == 'true' ]];
+then
+	/bin/echo "JVM property to force WebSphere Application Server to use an IPv6 socket to communicate is set."
+	/bin/echo "[java.net.preferIPv6Addresses = true] for using IPv6"
+else
+	/bin/echo "[java.net.preferIPv6Addresses] for using IPv6 not set"
+	if [[ ${CHECK_ONLY} -eq 0 ]];
+	then
+		/bin/echo "Setting IPv6 JVM property"
+		${WAS} "AdminTask.setJVMSystemProperties('[-propertyName java.net.preferIPv6Addresses -propertyValue true]')"
+		${WAS} "AdminConfig.save()"	
+	else
+		/bin/echo "To force IPv6 [java.net.preferIPv6Addresses = true] should be set"
+	fi
+fi
+
+/bin/echo ''
+/bin/echo 'WAS configuring SSL protocal to use TSLv1.2'
+/bin/echo ''
+
+ip4=$(${WAS} "print AdminTask.showJVMSystemProperties('-propertyName java.net.preferIPv4Stack')" | /usr/bin/tail -1)
+ip6=$(${WAS} "print AdminTask.showJVMSystemProperties('-propertyName java.net.preferIPv6Addresses')" | /usr/bin/tail -1)
+
+/bin/echo "Done."
+exit 0

@@ -1,0 +1,112 @@
+#!/bin/bash
+
+#
+# @author: Augustyn Chmiel
+#
+# this script should be run
+# on master machine	
+#
+
+quit='quit';
+in_length=$#;
+if [ $in_length -eq 0 ] || [ $in_length -lt 2 ]; then
+	echo '[INFO] :master_user ex. repl';
+	echo '[INFO] :master_password ex. flak';
+	exit 0;
+fi
+
+echo '[DEBUG] checking if mysql is installed ';
+# checking if mysql is installed
+dpkg -s mysql-server > /dev/null 2>&1;
+if [ $? = 1 ]; then
+	sudo aptitude update;
+	sudo aptitude update;
+	sudo aptitude install -y mysql-server;
+fi
+
+echo '';
+echo '';
+echo '[DEBUG] checking if the server-id already exist in config file';
+# checking file if server-id exist it will exit otherwise will set id for slave
+sudo cat /etc/mysql/my.cnf | egrep '^server-id.*' > /dev/null 2>&1;
+if [ $? -eq 0 ]; then 
+	echo '[ERROR] File probably contains the "server-id"';
+	exit 0;
+ else
+	sudo sed -i '/^\[mysqld\]$/a log-bin= /var/log/mysql/mysql-bin.log\nserver-id=1 #id for the master\n' /etc/mysql/my.cnf > /dev/null 2>&1;
+fi
+# listen for all hosts 
+sudo sed -i -e 's/^bind-address/# bind-address/' /etc/mysql/my.cnf;
+
+# uncomment this section when u need replication for particular db
+# if u need all db be replicated just do not specified which db u need
+#echo '[DEBUG] getting tables for replication from mysql';
+#mysql -u root -p -N -e "show databases like '%';" | grep -v -e information_schema -e performance_schema | while read out ; do sudo sed -i '/^log-bin=mysql-bin$/a #binlog-do-db='$out /etc/mysql/my.cnf | tee ; done;
+
+echo '';
+echo '';
+echo '[DEBUG] restart mysql db';
+# restart the mysql to apply changes
+sudo /etc/init.d/mysql restart 
+if [ $? -eq 1 ]; then
+	echo '[ERROR] cannot restart the mysql server';
+	exit 0;
+fi
+
+echo '';
+echo '';
+echo '[DEBUG] setup user for DB and add grants';
+# data needed for setup sql quires
+user_repl=$1;
+user_password=$2;
+create_user="create user '$user_repl'@'%' identified by '$user_password';";
+grant_all="grant all privileges on *.* to '$user_repl'@'%' identified by '$user_password';";
+grant_repl="grant replication slave on *.* to '$user_repl'@'%' identified by '$user_password';";
+flush_privileges="flush  privileges;";
+flush_tables="flush tables with read lock;";
+status="show master status\G";
+
+## run queries 
+sudo mysql -uroot -p << eof | tee master_status.info
+$create_user
+$grant_all
+$grant_repl
+$flush_privileges
+$flush_tables
+$status
+$quit
+eof
+ifconfig >> master_status.info
+if [ $? -eq 1 ]; then
+	echo '[ERROR] cannot set permissions';
+	exit 0; 
+fi
+
+# dumping all databases except information schema and preferments schema
+# all dbs it will storage in repl_db.dump
+echo '';
+echo '';
+echo '[DEBUG] dumping db except information_schema and performance_schema';
+echo '[INFO] you will have to type password for root user twice';
+mysql -u root -p -N -e "show databases like '%';" | grep -v -e information_schema -e performance_schema | xargs mysqldump -u root -p --databases > repl_db.dump
+if [ $? -eq 1 ]; then
+	echo '[ERROR] cannot dump db, to file';
+	exit 0;
+ else 
+	echo '[INFO] DB dumped to file named repl_db.dump and has to be moved to slave machine'	
+fi
+
+echo '';
+echo '';
+echo '[DEBUG] login mysql unlock db';
+unlock='unlock tables;'
+mysql -u root -p << eof
+$unlock
+$quit
+eof
+if [ $? -eq 1 ]; then
+	echo '[ERROR]';
+	exit 0;
+fi
+echo '[DEBUG] done...';
+

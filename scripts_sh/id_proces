@@ -1,0 +1,10 @@
+#!/bin/bash
+
+id_tcpspy=$(ps -C tcpspy -o pid=)
+id_snort=$(ps -C snort -o pid=)
+id_fprobe=$(ps -C fprobe -o pid=)
+echo tcpspy- $id_tcpspy
+echo snort- $id_snort
+echo fprobe- $id_fprobe
+sudo kill $id_tcpspy $id_snort $id_fprobe
+echo done..

@@ -1,0 +1,36 @@
+#!/bin/bash
+
+trap "rm -f ./testlock.lock" EXIT SIGINT
+date 
+ (
+  	flock -n 100 || exit 1
+  	echo "Doing some stuff…"
+  	pid=$$
+  	echo $pid 1>& ./testlock.lock
+	cat ./testlock.lock
+  	echo "Sleeping for 30 seconds…"  
+  	sleep 60
+ ) 100>./testlock.lock || exit 1
+date
+
+
+#####
+#####       This is useful boilerplate code for shell scripts. Put it at the top of the shell script you want to lock and it'll automatically lock itself on the first run. If the env var FLOCKER is not set to the shell script that
+#####       is being run, then execute flock and grab an exclusive non-blocking lock (using the script itself as the lock file) before re-execing itself with the right arguments. It also sets FLOCKER  to  the  right  value  so  it
+#####       doesn't run again.
+#####
+#####
+#####
+#####               [ "${FLOCKER}" != "$0" ] && exec env FLOCKER="$0" flock -n "$0" "$0" "$@" || :
+#####
+#####
+#####
+#####       Using  a  file  descriptor  with a shell block is useful for locking critical regions inside shell scripts. If the shell process has permission to write or create the lockfile, > allows the lockfile to be created if it
+#####       does not exist. If the process only has read permission, < allows the file to already exist but only read permission is required.
+#####
+#####
+#####
+#####               (
+#####                       flock -n 8 || exit 1
+#####                       # commands executed under lock ...
+#####               ) 8> /var/lock/mylockfile

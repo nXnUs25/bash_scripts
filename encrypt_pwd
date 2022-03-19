@@ -1,0 +1,10 @@
+#!/bin/bash
+
+#!/bin/sh    
+# using aesutil
+SALT=$(mkrand 15) # mkrand generates a 15-character random passwd
+MYENCPASS="i/b9pkcpQAPy7BzH2JlqHVoJc2mNTBM=" # echo "passwd" | aes -e -b -B -p $SALT 
+MYPASS=$(echo "$MYENCPASS" | aes -d -b -p $SALT)
+
+# and usage
+echo "$MYPASS"

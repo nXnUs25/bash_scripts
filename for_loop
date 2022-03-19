@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+val="a.b.c.d 1.2.3.4 aa.bb.cc.dd 11.22.11.22 123.123.1.12"
+
+WINDOWS_SERVERS="stmconvnode1 stmrennode1 stmconvnode2 stmconvnode3"
+
+for x in $(echo "${WINDOWS_SERVERS}")
+do
+	echo "[Host: ${x}]"
+	echo "$( host admin-${x} | awk '{print $NF}')"
+	echo "$( host ${x} | awk '{print $NF}')"
+	echo -e "\n"
+done
+
+
+val2=${val}
+
+echo -e "\n===\n${val2}"
+echo -e "==========\n\n"
+
+
+for x in "${WINDOWS_SERVERS}"
+do
+	echo "[Host: ${x}]"
+	echo "$( host admin-${x} | awk '{print $NF}')"
+	echo "$( host ${x} | awk '{print $NF}')"
+	echo -e "\n"
+done

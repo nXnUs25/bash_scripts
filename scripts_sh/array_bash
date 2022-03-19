@@ -1,0 +1,14 @@
+#!/bin/bash
+
+distro=("redhat" "debian" "gentoo");
+
+echo ${distro[0]}
+echo ${distro[2]}  # will print gentoo
+
+# lenght
+in=${#distro[@]}; 
+echo ${#distro[@]};
+echo ${#distro[*]}; 
+echo $in;
+
+mysql -u root -pflak -N -e "show databases like '%';" | grep -v -e information_schema -e performance_schema | xargs mysqldump -u root -p --databases > all_2.dump

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+
+#===============================================================================
+#         FILE:  vmkernel_logs_parser
+#         BASH:  GNU bash, version 4.2.45(2)-release (i386-apple-darwin12.5.0)
+#       AUTHOR:  Augustyn Chmiel, <augustyn.chmiel@mycit.ie>
+#      COMPANY:  Student
+#      VERSION:  1.0
+#      CREATED:  2014/03/17 20:12
+#===============================================================================
+
+set -o pipefail  # trace ERR through pipes
+set -o errtrace  # trace ERR through 'time command' and other functions
+set -o nounset   ## set -u : exit the script if you try to use an uninitialised variable
+set -o errexit   ## set -e : exit the script if any statement returns a non-true return value
+#set -o xtrace    ## debug mode
+
+stderr_log="/tmp/stderr.log"
+exec 2>> ${stderr_log}
+
+
+# colors for bash
+dim='\033[2m'
+inv='\033[7m';
+bold='\033[1m';
+normal='\033[00m';
+default='\033[39m';
+red='\033[91m';
+green='\033[32m';
+yellow='\033[33m';
+lblue='\033[94m';
+lcyan='\033[96m'
+blblue='\033[104m'
+blgray='\033[100m'
+over="\r\033[K" # Completely overwrite last line
+
+
+e='echo -e'
+p='printf'
+
+$e "${yellow}"
+$e "Yellow color"
+
+
+$p "Print test"
+$e "${normal}"

@@ -1,0 +1,1457 @@
+#!/usr/bin/env bash 
+#===============================================================================
+#         FILE:  vmkernel_logs_parser
+#         BASH:  GNU bash, version 4.2.45(2)-release (i386-apple-darwin12.5.0)
+#       AUTHOR:  Augustyn Chmiel, <augustyn.chmiel@mycit.ie>
+#      COMPANY:  Student
+#      VERSION:  1.0
+#      CREATED:  2014/03/17 20:12
+#===============================================================================
+
+set -o pipefail  # trace ERR through pipes
+set -o errtrace  # trace ERR through 'time command' and other functions
+set -o nounset   ## set -u : exit the script if you try to use an uninitialised variable
+set -o errexit   ## set -e : exit the script if any statement returns a non-true return value
+
+stderr_log="/tmp/stderr.log"
+exec 2>> ${stderr_log}
+
+#set -o xtrace    ## debug mode
+
+# colors for bash
+dim='\033[2m'
+inv='\033[7m';
+bold='\033[1m';
+normal='\033[00m';
+default='\033[39m';
+red='\033[91m';
+green='\033[32m';
+yellow='\033[33m';
+lblue='\033[94m';
+lcyan='\033[96m'
+blblue='\033[104m'
+blgray='\033[100m'
+over="\r\033[K" # Completely overwrite last line
+
+
+LOGPATH='/'
+FILENAME='vmkernel.*'
+
+usage () {
+   echo -e ''
+   echo -e "vmkernel_logs_parser(1)                     ESX/ESXi                    vmkernel_logs_parser(1)"
+   echo -e ""
+   echo -e ${bold}"NAME"
+   echo -e "\tvmkernel_logs_parser"${normal}" -- parse the vmkernel logs for SCSI fail commands"
+   echo -e ""
+   echo -e ${bold}"SYNOPSIS"
+   echo -e ${bold}"\tvmkernel_logs_parser"${normal}" [-${bold}-h${normal}] | [-${bold}d|o|m${normal}] [-${bold}SqcHDANPT${normal}] [-${bold}l${normal}... num] [-${bold}f${normal}... file | -${bold}R${normal}... directory]"
+   echo -e ""
+   echo -e ${bold}"DESCRIPTION"${normal}
+   echo -e "\tThe script it is finding all vmkernel.* on server and it is parsing the output"
+   echo -e "\tby looking for SCSI failed commands.\n"
+   echo -e "\tThe following options are available:\n"
+   echo -e "\t${bold}"-h --help"${normal} display this message"
+   echo -e "\t${bold}"-d --days"${normal} this switch it is sorting logs via day month year, cannot be applied with ${bold}-o --hours${normal} or ${bold}-m minutes${normal}"
+   echo -e "\t${bold}"-o --hours"${normal} it is sorting logs via hour day month year"
+   echo -e "\t${bold}"-m --minutes"${normal} it is sorting logs via minute hour day month year"
+   echo -e "\t${bold}"-S --stats"${normal} display extra table which contain information about log file records and number of failed comands"
+   echo -e "\t${bold}"-q --quiet"${normal} execute script with defaults settings"
+   echo -e "\t${bold}"-c --scsi_cmd"${normal} group output via scsi commands"
+   echo -e "\t${bold}"-H --host_code"${normal} group output via host code"
+   echo -e "\t${bold}"-D --device_code"${normal} group output via device code"
+   echo -e "\t${bold}"-A --asc_asq"${normal} group output via sense data ASC/ASQ"
+   echo -e "\t${bold}"-N --device_id"${normal} group via device ID"
+   echo -e "\t${bold}"-P --device_path"${normal} group via device path"
+   echo -e "\t${bold}"-T --translate"${normal} translate scsi code to Err"
+   echo -e "\t${bold}"-f --file"${normal} load file"
+   echo -e "\t${bold}"-R --directory"${normal} search directory for vmkernel.* logs"
+   echo -e "\t${bold}"-l --lines"${normal} read only specified number of lines\n"
+
+   exit 0
+# hdomSqcHDANPTf:R:l: -l "help,days,hours,minutes,stats,quiet,scsi_cmd,host_code,device_code,asc_asq,device_id,device_path,translate,file:,directory:,lines:
+}
+
+ask () {
+   printf "${1}\n\n"
+   local _answ=${3}
+
+   while true  
+   do
+      printf "${2} (${bold}y${normal}|${bold}n${normal}) [${lblue}n = exit${normal}] [Default ${lcyan}no${normal}]: "
+      read -t 20 -n 1 _char
+      case ${_char} in
+        y|Y)
+	  eval ${_answ}=1	
+	  break
+          ;;
+        n|N)
+	  usage
+	  exit 2
+	  ;;
+	*)
+	  [[ -z ${_char} ]] && printf "${bold}${red}Error occured. Exit!!!\n" && exit 1 
+	  continue
+          ;;
+       esac
+   done
+}
+
+scsi_host_code () {
+	local opt='xxx'
+	[[ ! -z ${1} ]] && opt=${1}
+#	echo ${opt}" - "${1} > "/tmp/bla"
+   case ${opt} in
+	0x0) 
+	  printf "SG_ERR_DID_OK" # [0x00]" NO error
+	  ;;
+	0x1)
+	  printf "SG_ERR_DID_NO_CONNECT" # [0x01] Couldn't connect before timeout period
+	  ;;
+	0x2)
+	  printf "SG_ERR_DID_BUS_BUSY" # [0x02] BUS stayed busy through time out period
+	  ;;
+	0x3)
+	  printf "SG_ERR_DID_TIME_OUT" #[0x03] TIMED OUT for other reason (often this an unexpected device selection timeout)
+	  ;;
+	0x4)
+	  printf "SG_ERR_DID_BAD_TARGET" # [0x04] BAD target, device not responding?
+	  ;;
+	0x5)
+	  printf "SG_ERR_DID_ABORT" # [0x05] Told to abort for some other reason. From lk 2.4.15 the SCSI subsystem supports 16 byte commands however few adapter drivers do. Those HBA drivers that don't support 16 byte commands will yield this error code if a 16 byte command is passed to a SCSI device they control.
+	  ;;
+	0x6)
+	  printf "SG_ERR_DID_PARITY" # [0x06] # Parity error. Older SCSI parallel buses have a parity bit for error detection. This probably indicates a cable or termination problem.
+	  ;;
+	0x7)
+	  printf "SG_ERR_DID_ERROR" # [0x07] # Internal error detected in the host adapter. This may not be fatal (and the command may have succeeded). The aic7xxx and sym53c8xx adapter drivers sometimes report this for data underruns or overruns. [1]
+	  ;;
+	0x8)
+	  printf "SG_ERR_DID_RESET" # [0x08] The SCSI bus (or this device) has been reset. Any SCSI device on a SCSI bus is capable of instigating a reset.
+	  ;;
+	0x9)
+	  printf "SG_ERR_DID_BAD_INTR" # [0x09] Got an interrupt we weren't expecting
+	  ;;
+	0xa)
+	  printf "SG_ERR_DID_PASSTHROUGH" # [0x0a] Force command past mid-layer
+	  ;;
+	0xb)
+	  printf "SG_ERR_DID_SOFT_ERROR" # [0x0b] The low level driver wants a retry
+	  ;;
+	*)
+	  printf "UNKNOWN_ERR"
+	  ;;
+    esac
+}
+
+scsi_device_code () {
+	local opt='xxx'
+        [[ ! -z ${1} ]] && opt=${1}
+   case ${opt} in 
+	0x0)
+          printf "GOOD"
+          ;;
+        0x2)
+          printf "CHECK_CONDITION"
+          ;;
+        0x4)
+          printf "CONDITION_MET"
+          ;;
+        0x8)
+          printf "BUSY"
+          ;;
+        0x18)
+          printf "RESERVATION_CONFLICT"
+          ;;
+        0x28)
+          printf "TASK_SET_FULL"
+          ;;
+        0x3)
+          printf "ACA_ACTIVE"
+          ;;
+        0x4)
+          printf "TASK_ABORTED"
+          ;;
+        *)
+	  printf "UNKNOWN_CODE"
+          ;;
+   esac
+#00h  GOOD
+#02h  CHECK CONDITION
+#04h  CONDITION MET
+#08h  BUSY
+#18h  RESERVATION CONFLICT
+#28h  TASK SET FULL
+#30h  ACA ACTIVE
+#40h  TASK ABORTED
+}
+
+scsi_code () {
+	[[ -z ${1} ]] && printf "${bold}${red}Error occured. Exit!!!\n" && exit 1
+	printf "%-22s %-20s" "$(scsi_host_code "$(echo ${1} | ${_awk} '{print $1}')")" "$(scsi_device_code "$(echo ${1} | ${_awk} '{print $2}')")"
+}
+
+scsi_cmd () {
+   	[[ -z ${1} ]] && printf "${bold}${red}Error occured. Exit!!!\n" && exit 1
+	case ${1} in 
+          0x0)
+            printf "TEST_UNIT_READY"
+            ;;
+          0x1)
+            printf "REWIND"
+            ;;
+          0x3)
+            printf "REQUEST_SENSE"
+            ;;
+          0x4)
+            printf "FORMAT"
+            ;;
+          0x5)
+            printf "READ_BLOCK_LIMITS"
+            ;;
+          0x7)
+            printf "REASSIGN_BLOCKS"
+            ;;
+          0x7)
+            printf "INITIALIZE_ELEMENT_STATUS"
+            ;;
+          0x8)
+            printf "READ(6)"
+            ;;
+          0xa)
+            printf "WRITE(6)"
+            ;;
+          0xb)
+            printf "SEEK(6)"
+            ;;
+          0xf)
+            printf "READ_REVERSE(6)"
+            ;;
+          0x10)
+            printf "WRITE_FILEMARKS(6)"
+            ;;
+          0x11)
+            printf "SPACE(6)"
+            ;;
+          0x12)
+            printf "INQUIRY"
+            ;;
+          0x13)
+            printf "VERIFY(6)"
+            ;;
+          0x14)
+            printf "RECOVER_BUFFERED_DATA"
+            ;;
+          0x15)
+            printf "MODE_SELECT(6)"
+            ;;
+          0x16)
+            printf "RESERVE(6)"
+            ;;
+          0x17)
+            printf "RELEASE(6)"
+            ;;
+          0x18)
+            printf "COPY"
+            ;;
+          0x19)
+            printf "ERASE_(6)"
+            ;;
+          0x1a)
+            printf "MODE_SENSE_(6)"
+            ;;
+          0x1b)
+            printf "START_STOP_UNIT"
+            ;;
+          0x1b)
+            printf "LOAD_UNLOAD"
+            ;;
+          0x1c)
+            printf "RECEIVE_DIAGNOSTIC_RESULTS"
+            ;;
+          0x1d)
+            printf "SEND_DIAGNOSTIC"
+            ;;
+          0x1e)
+            printf "PREVENT_ALLOW_MEDIUM_REMOVAL"
+            ;;
+          0x23)
+            printf "READ_FORMAT_CAPACITIES"
+            ;;
+          0x25)
+            printf "READ_CAPACITY(10)"
+            ;;
+          0x28)
+            printf "READ(10)"
+            ;;
+          0x29)
+            printf "READ_GENERATION"
+            ;;
+          0x2a)
+            printf "WRITE(10)"
+            ;;
+          0x2b)
+            printf "SEEK(10)"
+            ;;
+          0x2b)
+            printf "LOCATE(10)"
+            ;;
+          0x2c)
+            printf "ERASE(10)"
+            ;;
+          0x2d)
+            printf "READ_UPDATED_BLOCK"
+            ;;
+          0x2e)
+            printf "WRITE_AND_VERIFY(10)"
+            ;;
+          0x2f)
+            printf "VERIFY(10)"
+            ;;
+          0x33)
+            printf "SET_LIMITS(10)"
+            ;;
+          0x34)
+            printf "PRE-FETCH(10)"
+            ;;
+          0x34)
+            printf "READ_POSITION"
+            ;;
+          0x35)
+            printf "SYNCHRONIZE_CACHE(10)"
+            ;;
+          0x36)
+            printf "LOCK_UNLOCK_CACHE(10)"
+            ;;
+          0x37)
+            printf "READ_DEFECT_DATA(10)"
+            ;;
+          0x37)
+            printf "INITIALIZE_ELEMENT_STATUS_WITH_RANGE"
+            ;;
+          0x38)
+            printf "MEDIUM_SCAN"
+            ;;
+          0x39)
+            printf "COMPARE"
+            ;;
+          0x3a)
+            printf "COPY_AND_VERIFY"
+            ;;
+          0x3b)
+            printf "WRITE_BUFFER"
+            ;;
+          0x3c)
+            printf "READ_BUFFER"
+            ;;
+          0x3d)
+            printf "UPDATE_BLOCK"
+            ;;
+          0x3e)
+            printf "READ_LONG(10)"
+            ;;
+          0x3f)
+            printf "WRITE_LONG(10)"
+            ;;
+          0x40)
+            printf "CHANGE_DEFINITION"
+            ;;
+          0x41)
+            printf "WRITE_SAME(10)"
+            ;;
+          0x43)
+            printf "READ_TOC/PMA/ATIP"
+            ;;
+          0x44)
+            printf "REPORT_DENSITY_SUPPORT"
+            ;;
+          0x45)
+            printf "PLAY_AUDIO(10)"
+            ;;
+          0x46)
+            printf "GET_CONFIGURATION"
+            ;;
+          0x47)
+            printf "PLAY_AUDIO_MSF"
+            ;;
+          0x48)
+            printf "SANITIZE"
+            ;;
+          0x4a)
+            printf "GET_EVENT_STATUS_NOTIFICATION"
+            ;;
+          0x4b)
+            printf "PAUSE/RESUME"
+            ;;
+          0x4c)
+            printf "LOG_SELECT"
+            ;;
+          0x4d)
+            printf "LOG_SENSE"
+            ;;
+          0x50)
+            printf "XDWRITE(10)"
+            ;;
+          0x51)
+            printf "XPWRITE(10)"
+            ;;
+          0x51)
+            printf "READ_DISC_INFORMATION"
+            ;;
+          0x52)
+            printf "XDREAD(10)"
+            ;;
+          0x53)
+            printf "XDWRITEREAD(10)"
+            ;;
+          0x54)
+            printf "SEND_OPC_INFORMATION"
+            ;;
+          0x55)
+            printf "MODE_SELECT(10)"
+            ;;
+          0x56)
+            printf "RESERVE(10)"
+            ;;
+          0x57)
+            printf "RELEASE(10)"
+            ;;
+          0x58)
+            printf "REPAIR_TRACK"
+            ;;
+          0x5a)
+            printf "MODE_SENSE(10)"
+            ;;
+          0x5b)
+            printf "CLOSE_TRACK/SESSION"
+            ;;
+          0x5c)
+            printf "READ_BUFFER_CAPACITY"
+            ;;
+          0x5d)
+            printf "SEND_CUE_SHEET"
+            ;;
+          0x5e)
+            printf "PERSISTENT_RESERVE_IN"
+            ;;
+          0x5f)
+            printf "PERSISTENT_RESERVE_OUT"
+            ;;
+          0x7e)
+            printf "extended_CDB"
+            ;;
+          0x7f)
+            printf "variable_length_CDB"
+            ;;
+          0x80)
+            printf "XDWRITE_EXTENDED(16)"
+            ;;
+          0x80)
+            printf "WRITE_FILEMARKS(16)"
+            ;;
+          0x81)
+            printf "READ_REVERSE(16)"
+            ;;
+          0x83)
+            printf "Third-party_Copy_OUT_commands"
+            ;;
+          0x84)
+            printf "Third-party_Copy_IN_commands"
+            ;;
+          0x85)
+            printf "ATA_PASS-THROUGH(16)"
+            ;;
+          0x86)
+            printf "ACCESS_CONTROL_IN"
+            ;;
+          0x87)
+            printf "ACCESS_CONTROL_OUT"
+            ;;
+          0x88)
+            printf "READ(16)"
+            ;;
+          0x89)
+            printf "COMPARE_AND_WRITE"
+            ;;
+          0x8a)
+            printf "WRITE(16)"
+            ;;
+          0x8b)
+            printf "ORWRITE"
+            ;;
+          0x8c)
+            printf "READ_ATTRIBUTE"
+            ;;
+          0x8d)
+            printf "WRITE_ATTRIBUTE"
+            ;;
+          0x8e)
+            printf "WRITE_AND_VERIFY(16)"
+            ;;
+          0x8f)
+            printf "VERIFY(16)"
+            ;;
+          0x90)
+            printf "PRE-FETCH(16)"
+            ;;
+          0x91)
+            printf "SYNCHRONIZE_CACHE(16)"
+            ;;
+          0x91)
+            printf "SPACE(16)"
+            ;;
+          0x92)
+            printf "LOCK_UNLOCK_CACHE(16)"
+            ;;
+          0x92)
+            printf "LOCATE(16)"
+            ;;
+          0x93)
+            printf "WRITE_SAME(16)"
+            ;;
+          0x93)
+            printf "ERASE(16)"
+            ;;
+          0x9d)
+            printf "SERVICE_ACTION_BIDIRECTIONAL"
+            ;;
+          0x9e)
+            printf "SERVICE_ACTION_IN(16)"
+            ;;
+          0x9f)
+            printf "SERVICE_ACTION_OUT(16)"
+            ;;
+          0xa0)
+            printf "REPORT_LUNS"
+            ;;
+          0xa1)
+            printf "ATA_PASS-THROUGH(12)"
+            ;;
+          0xa2)
+            printf "SECURITY_PROTOCOL_IN"
+            ;;
+          0xa3)
+            printf "MAINTENANCE_IN"
+            ;;
+          0xa4)
+            printf "MAINTENANCE_OUT"
+            ;;
+          0xa4)
+            printf "REPORT_KEY"
+            ;;
+          0xa5)
+            printf "MOVE_MEDIUM"
+            ;;
+          0xa5)
+            printf "PLAY_AUDIO_12"
+            ;;
+          0xa6)
+            printf "EXCHANGE_MEDIUM"
+            ;;
+          0xa7)
+            printf "MOVE_MEDIUM_ATTACHED"
+            ;;
+          0xa8)
+            printf "READ(12)"
+            ;;
+          0xa9)
+            printf "SERVICE_ACTION_OUT(12)"
+            ;;
+          0xaa)
+            printf "WRITE(12)"
+            ;;
+          0xab)
+            printf "SERVICE_ACTION_IN(12)"
+            ;;
+          0xac)
+            printf "ERASE(12)"
+            ;;
+          0xad)
+            printf "READ_DVD_STRUCTURE"
+            ;;
+          0xae)
+            printf "WRITE_AND_VERIFY(12)"
+            ;;
+          0xaf)
+            printf "VERIFY(12)"
+            ;;
+          0xb0)
+            printf "SEARCH_DATA_HIGH(12)"
+            ;;
+          0xb1)
+            printf "SEARCH_DATA_EQUAL(12)"
+            ;;
+          0xb2)
+            printf "SEARCH_DATA_LOW(12)"
+            ;;
+          0xb3)
+            printf "SET_LIMITS(12)"
+            ;;
+          0xb4)
+            printf "READ_ELEMENT_STATUS_ATTACHED"
+            ;;
+          0xb5)
+            printf "SECURITY_PROTOCOL_OUT"
+            ;;
+          0xb6)
+            printf "SEND_VOLUME_TAG"
+            ;;
+          0xb7)
+            printf "READ_DEFECT_DATA(12)"
+            ;;
+          0xb8)
+            printf "READ_ELEMENT_STATUS"
+            ;;
+          0xb9)
+            printf "READ_CD_MSF"
+            ;;
+          0xba)
+            printf "REDUNDANCY_GROUP_(IN)"
+            ;;
+          0xbb)
+            printf "REDUNDANCY_GROUP_(OUT)"
+            ;;
+          0xbc)
+            printf "SPARE_(IN)"
+            ;;
+          0xbd)
+            printf "SPARE_(OUT)"
+            ;;
+          0xbe)
+            printf "VOLUME_SET_(IN)"
+            ;;
+          0xbf)
+            printf "VOLUME_SET_(OUT)"
+            ;;	
+	  *)
+	    printf "UNKNOW_CMD" 
+	    ;;
+	esac
+}
+
+sense_data () {
+        [[ -z ${1} ]] && printf "${bold}${red}Error occured. Exit!!!\n" && exit 1
+        case ${1} in 
+	  0x0-0x0-0x0)
+            printf "No_error"
+            ;;
+          0x0-0x5d-0x0)
+            printf "No_sense_-_PFA_threshold_reached"
+            ;;
+          0x1-0x1-0x0)
+            printf "Recovered_Write_error_-_no_index"
+            ;;
+          0x1-0x2-0x0)
+            printf "Recovered_no_seek_completion"
+            ;;
+          0x1-0x3-0x0)
+            printf "Recovered_Write_error_-_write_fault"
+            ;;
+          0x1-0x9-0x0)
+            printf "Track_following_error"
+            ;;
+          0x1-0xb-0x1)
+            printf "Temperature_warning"
+            ;;
+          0x1-0xc-0x1)
+            printf "Recovered_Write_error_with_auto-realloc_-_reallocated"
+            ;;
+          0x1-0xc-0x3)
+            printf "Recovered_Write_error_-_recommend_reassign"
+            ;;
+          0x1-0x12-0x1)
+            printf "Recovered_data_without_ECC_using_prev_logical_block_ID"
+            ;;
+          0x1-0x12-0x2)
+            printf "Recovered_data_with_ECC_using_prev_logical_block_ID"
+            ;;
+          0x1-0x14-0x1)
+            printf "Recovered_Record_Not_Found"
+            ;;
+          0x1-0x16-0x0)
+            printf "Recovered_Write_error_-_Data_Sync_Mark_Error"
+            ;;
+          0x1-0x16-0x1)
+            printf "Recovered_Write_error_-_Data_Sync_Error_-_data_rewritten"
+            ;;
+          0x1-0x16-0x2)
+            printf "Recovered_Write_error_-_Data_Sync_Error_-_recommend_rewrite"
+            ;;
+          0x1-0x16-0x3)
+            printf "Recovered_Write_error_-_Data_Sync_Error_-_data_auto-reallocated"
+            ;;
+          0x1-0x16-0x4)
+            printf "Recovered_Write_error_-_Data_Sync_Error_-_recommend_reassignment"
+            ;;
+          0x1-0x17-0x0)
+            printf "Recovered_data_with_no_error_correction_applied"
+            ;;
+          0x1-0x17-0x1)
+            printf "Recovered_Read_error_-_with_retries"
+            ;;
+          0x1-0x17-0x2)
+            printf "Recovered_data_using_positive_offset"
+            ;;
+          0x1-0x17-0x3)
+            printf "Recovered_data_using_negative_offset"
+            ;;
+          0x1-0x17-0x5)
+            printf "Recovered_data_using_previous_logical_block_ID"
+            ;;
+          0x1-0x17-0x6)
+            printf "Recovered_Read_error_-_without_ECC,_auto_reallocated"
+            ;;
+          0x1-0x17-0x7)
+            printf "Recovered_Read_error_-_without_ECC,_recommend_reassign"
+            ;;
+          0x1-0x17-0x8)
+            printf "Recovered_Read_error_-_without_ECC,_recommend_rewrite"
+            ;;
+          0x1-0x17-0x9)
+            printf "Recovered_Read_error_-_without_ECC,_data_rewritten"
+            ;;
+          0x1-0x18-0x0)
+            printf "Recovered_Read_error_-_with_ECC"
+            ;;
+          0x1-0x18-0x1)
+            printf "Recovered_data_with_ECC_and_retries"
+            ;;
+          0x1-0x18-0x2)
+            printf "Recovered_Read_error_-_with_ECC,_auto_reallocated"
+            ;;
+          0x1-0x18-0x5)
+            printf "Recovered_Read_error_-_with_ECC,_recommend_reassign"
+            ;;
+          0x1-0x18-0x6)
+            printf "Recovered_data_using_ECC_and_offsets"
+            ;;
+          0x1-0x18-0x7)
+            printf "Recovered_Read_error_-_with_ECC,_data_rewritten"
+            ;;
+          0x1-0x1c-0x0)
+            printf "Defect_List_not_found"
+            ;;
+          0x1-0x1c-0x1)
+            printf "Primary_defect_list_not_found"
+            ;;
+          0x1-0x1c-0x2)
+            printf "Grown_defect_list_not_found"
+            ;;
+          0x1-0x1f-0x0)
+            printf "Partial_defect_list_transferred"
+            ;;
+          0x1-0x44-0x0)
+            printf "Internal_target_failure"
+            ;;
+          0x1-0x5d-0x0)
+            printf "PFA_threshold_reached"
+            ;;
+          0x2-0x4-0x0)
+            printf "Not_Ready_-_Cause_not_reportable."
+            ;;
+          0x2-0x4-0x1)
+            printf "Not_Ready_-_becoming_ready"
+            ;;
+          0x2-0x4-0x2)
+            printf "Not_Ready_-_need_initialise_command_(start_unit)"
+            ;;
+          0x2-0x4-0x3)
+            printf "Not_Ready_-_manual_intervention_required"
+            ;;
+          0x2-0x4-0x4)
+            printf "Not_Ready_-_format_in_progress"
+            ;;
+          0x2-0x4-0x9)
+            printf "Not_Ready_-_self-test_in_progress"
+            ;;
+          0x2-0x31-0x0)
+            printf "Not_Ready_-_medium_format_corrupted"
+            ;;
+          0x2-0x31-0x1)
+            printf "Not_Ready_-_format_command_failed"
+            ;;
+          0x2-0x35-0x2)
+            printf "Not_Ready_-_enclosure_services_unavailable"
+            ;;
+          0x2-0x3a-0x0)
+            printf "Not_Ready_-_medium_not_present"
+            ;;
+          0x2-0x3a-0x1)
+            printf "Not_Ready_-_medium_not_present_-_tray_closed"
+            ;;
+          0x2-0x3a-0x2)
+            printf "Not_Ready_-_medium_not_present_-_tray_open"
+            ;;
+          0x2-0x4c-0x0)
+            printf "Diagnostic_Failure_-_config_not_loaded"
+            ;;
+          0x3-0x2-0x0)
+            printf "Medium_Error_-_No_Seek_Complete"
+            ;;
+          0x3-0x3-0x0)
+            printf "Medium_Error_-_write_fault"
+            ;;
+          0x3-0x10-0x0)
+            printf "Medium_Error_-_ID_CRC_error"
+            ;;
+          0x3-0x11-0x0)
+            printf "Medium_Error_-_unrecovered_read_error"
+            ;;
+          0x3-0x11-0x1)
+            printf "Medium_Error_-_read_retries_exhausted"
+            ;;
+          0x3-0x11-0x2)
+            printf "Medium_Error_-_error_too_long_to_correct"
+            ;;
+          0x3-0x11-0x4)
+            printf "Medium_Error_-_unrecovered_read_error_-_auto_re-alloc_failed"
+            ;;
+          0x3-0x11-0xb)
+            printf "Medium_Error_-_unrecovered_read_error_-_recommend_reassign"
+            ;;
+          0x3-0x14-0x1)
+            printf "Medium_Error_-_record_not_found"
+            ;;
+          0x3-0x16-0x0)
+            printf "Medium_Error_-_Data_Sync_Mark_error"
+            ;;
+          0x3-0x16-0x4)
+            printf "Medium_Error_-_Data_Sync_Error_-_recommend_reassign"
+            ;;
+          0x3-0x19-0x0)
+            printf "Medium_Error_-_defect_list_error"
+            ;;
+          0x3-0x19-0x1)
+            printf "Medium_Error_-_defect_list_not_available"
+            ;;
+          0x3-0x19-0x2)
+            printf "Medium_Error_-_defect_list_error_in_primary_list"
+            ;;
+          0x3-0x19-0x3)
+            printf "Medium_Error_-_defect_list_error_in_grown_list"
+            ;;
+          0x3-0x19-0xe)
+            printf "Medium_Error_-_fewer_than_50%_defect_list_copies"
+            ;;
+          0x3-0x31-0x0)
+            printf "Medium_Error_-_medium_format_corrupted"
+            ;;
+          0x3-0x31-0x1)
+            printf "Medium_Error_-_format_command_failed"
+            ;;
+          0x4-0x1-0x0)
+            printf "Hardware_Error_-_no_index_or_sector"
+            ;;
+          0x4-0x2-0x0)
+            printf "Hardware_Error_-_no_seek_complete"
+            ;;
+          0x4-0x3-0x0)
+            printf "Hardware_Error_-_write_fault"
+            ;;
+          0x4-0x9-0x0)
+            printf "Hardware_Error_-_track_following_error"
+            ;;
+          0x4-0x11-0x0)
+            printf "Hardware_Error_-_unrecovered_read_error_in_reserved_area"
+            ;;
+          0x4-0x15-0x1)
+            printf "Hardware_Error_-_Mechanical_positioning_error"
+            ;;
+          0x4-0x16-0x0)
+            printf "Hardware_Error_-_Data_Sync_Mark_error_in_reserved_area"
+            ;;
+          0x4-0x19-0x0)
+            printf "Hardware_Error_-_defect_list_error"
+            ;;
+          0x4-0x19-0x2)
+            printf "Hardware_Error_-_defect_list_error_in_Primary_List"
+            ;;
+          0x4-0x19-0x3)
+            printf "Hardware_Error_-_defect_list_error_in_Grown_List"
+            ;;
+          0x4-0x31-0x0)
+            printf "Hardware_Error_-_reassign_failed"
+            ;;
+          0x4-0x32-0x0)
+            printf "Hardware_Error_-_no_defect_spare_available"
+            ;;
+          0x4-0x35-0x1)
+            printf "Hardware_Error_-_unsupported_enclosure_function"
+            ;;
+          0x4-0x35-0x2)
+            printf "Hardware_Error_-_enclosure_services_unavailable"
+            ;;
+          0x4-0x35-0x3)
+            printf "Hardware_Error_-_enclosure_services_transfer_failure"
+            ;;
+          0x4-0x35-0x4)
+            printf "Hardware_Error_-_enclosure_services_refused"
+            ;;
+          0x4-0x35-0x5)
+            printf "Hardware_Error_-_enclosure_services_checksum_error"
+            ;;
+          0x4-0x3e-0x3)
+            printf "Hardware_Error_-_self-test_failed"
+            ;;
+          0x4-0x3e-0x4)
+            printf "Hardware_Error_-_unable_to_update_self-test"
+            ;;
+          0x4-0x44-0x0)
+            printf "Hardware_Error_-_internal_target_failure"
+            ;;
+          0x5-0x1a-0x0)
+            printf "Illegal_Request_-_parm_list_length_error"
+            ;;
+          0x5-0x20-0x0)
+            printf "Illegal_Request_-_invalid/unsupported_command_code"
+            ;;
+          0x5-0x21-0x0)
+            printf "Illegal_Request_-_LBA_out_of_range"
+            ;;
+          0x5-0x24-0x0)
+            printf "Illegal_Request_-_invalid_field_in_CDB_(Command_Descriptor_Block)"
+            ;;
+          0x5-0x25-0x0)
+            printf "Illegal_Request_-_invalid_LUN"
+            ;;
+          0x5-0x26-0x0)
+            printf "Illegal_Request_-_invalid_fields_in_parm_list"
+            ;;
+          0x5-0x26-0x1)
+            printf "Illegal_Request_-_parameter_not_supported"
+            ;;
+          0x5-0x26-0x2)
+            printf "Illegal_Request_-_invalid_parm_value"
+            ;;
+          0x5-0x26-0x3)
+            printf "Illegal_Request_-_invalid_field_parameter_-_threshold_parameter"
+            ;;
+          0x5-0x26-0x4)
+            printf "Illegal_Request_-_invalid_release_of_persistent_reservation"
+            ;;
+          0x5-0x2c-0x0)
+            printf "Illegal_Request_-_command_sequence_error"
+            ;;
+          0x5-0x35-0x1)
+            printf "Illegal_Request_-_unsupported_enclosure_function"
+            ;;
+          0x5-0x49-0x0)
+            printf "Illegal_Request_-_invalid_message"
+            ;;
+          0x5-0x53-0x0)
+            printf "Illegal_Request_-_media_load_or_eject_failed"
+            ;;
+          0x5-0x53-0x1)
+            printf "Illegal_Request_-_unload_tape_failure"
+            ;;
+          0x5-0x53-0x2)
+            printf "Illegal_Request_-_medium_removal_prevented"
+            ;;
+          0x5-0x55-0x0)
+            printf "Illegal_Request_-_system_resource_failure"
+            ;;
+          0x5-0x55-0x1)
+            printf "Illegal_Request_-_system_buffer_full"
+            ;;
+          0x5-0x55-0x4)
+            printf "Illegal_Request_-_Insufficient_Registration_Resources"
+            ;;
+          0x6-0x28-0x0)
+            printf "Unit_Attention_-_not-ready_to_ready_transition_(format_complete)"
+            ;;
+          0x6-0x29-0x0)
+            printf "Unit_Attention_-_POR_or_device_reset_occurred"
+            ;;
+          0x6-0x29-0x1)
+            printf "Unit_Attention_-_POR_occurred"
+            ;;
+          0x6-0x29-0x2)
+            printf "Unit_Attention_-_SCSI_bus_reset_occurred"
+            ;;
+          0x6-0x29-0x3)
+            printf "Unit_Attention_-_TARGET_RESET_occurred"
+            ;;
+          0x6-0x29-0x4)
+            printf "Unit_Attention_-_self-initiated-reset_occurred"
+            ;;
+          0x6-0x29-0x5)
+            printf "Unit_Attention_-_transceiver_mode_change_to_SE"
+            ;;
+          0x6-0x29-0x6)
+            printf "Unit_Attention_-_transceiver_mode_change_to_LVD"
+            ;;
+          0x6-0x2a-0x0)
+            printf "Unit_Attention_-_parameters_changed"
+            ;;
+          0x6-0x2a-0x1)
+            printf "Unit_Attention_-_mode_parameters_changed"
+            ;;
+          0x6-0x2a-0x2)
+            printf "Unit_Attention_-_log_select_parms_changed"
+            ;;
+          0x6-0x2a-0x3)
+            printf "Unit_Attention_-_Reservations_pre-empted"
+            ;;
+          0x6-0x2a-0x4)
+            printf "Unit_Attention_-_Reservations_released"
+            ;;
+          0x6-0x2a-0x5)
+            printf "Unit_Attention_-_Registrations_pre-empted"
+            ;;
+          0x6-0x2f-0x0)
+            printf "Unit_Attention_-_commands_cleared_by_another_initiator"
+            ;;
+          0x6-0x3f-0x0)
+            printf "Unit_Attention_-_target_operating_conditions_have_changed"
+            ;;
+          0x6-0x3f-0x1)
+            printf "Unit_Attention_-_microcode_changed"
+            ;;
+          0x6-0x3f-0x2)
+            printf "Unit_Attention_-_changed_operating_definition"
+            ;;
+          0x6-0x3f-0x3)
+            printf "Unit_Attention_-_inquiry_parameters_changed"
+            ;;
+          0x6-0x3f-0x5)
+            printf "Unit_Attention_-_device_identifier_changed"
+            ;;
+          0x6-0x5d-0x0)
+            printf "Unit_Attention_-_PFA_threshold_reached"
+            ;;
+          0x7-0x27-0x0)
+            printf "Write_Protect_-_command_not_allowed"
+            ;;
+          0xb-0x0-0x0)
+            printf "Aborted_Command_-_no_additional_sense_code"
+            ;;
+          0xb-0x1b-0x0)
+            printf "Aborted_Command_-_sync_data_transfer_error_(extra_ACK)"
+            ;;
+          0xb-0x25-0x0)
+            printf "Aborted_Command_-_unsupported_LUN"
+            ;;
+          0xb-0x3f-0xf)
+            printf "Aborted_Command_-_echo_buffer_overwritten"
+            ;;
+          0xb-0x43-0x0)
+            printf "Aborted_Command_-_message_reject_error"
+            ;;
+          0xb-0x44-0x0)
+            printf "Aborted_Command_-_internal_target_failure"
+            ;;
+          0xb-0x45-0x0)
+            printf "Aborted_Command_-_Selection/Reselection_failure"
+            ;;
+          0xb-0x47-0x0)
+            printf "Aborted_Command_-_SCSI_parity_error"
+            ;;
+          0xb-0x48-0x0)
+            printf "Aborted_Command_-_initiator-detected_error_message_received"
+            ;;
+          0xb-0x49-0x0)
+            printf "Aborted_Command_-_inappropriate/illegal_message"
+            ;;
+          0xb-0x4b-0x0)
+            printf "Aborted_Command_-_data_phase_error"
+            ;;
+          0xb-0x4e-0x0)
+            printf "Aborted_Command_-_overlapped_commands_attempted"
+            ;;
+          0xb-0x4f-0x0)
+            printf "Aborted_Command_-_due_to_loop_initialisation"
+            ;;
+          0xe-0x1d-0x0)
+            printf "Miscompare_-_during_verify_byte_check_operation"
+            ;; 
+	   *)
+	     printf "UNKNOW_DATA"
+            ;;
+	esac
+}
+
+[[ ! -f /usr/bin/which ]] && echo -e ${bold}${red}"Missing command /usr/bin/which" && exit 1
+
+_clear=$(/usr/bin/which clear)
+_date=$(/usr/bin/which date)
+_head=$(/usr/bin/which head) 
+_tail=$(/usr/bin/which tail) 
+_find=$(/usr/bin/which find) 
+_dirname=$(/usr/bin/which dirname) 
+_basename=$(/usr/bin/which basename)
+_sed=$(/usr/bin/which sed) 
+_grep=$(/usr/bin/which grep) 
+_awk=$(/usr/bin/which awk)
+_xargs=$(/usr/bin/which xargs)
+_sort=$(/usr/bin/which sort)
+_ls=$(/usr/bin/which ls)
+_tr=$(/usr/bin/which tr)
+_wc=$(/usr/bin/which wc)
+_pwd=$(/usr/bin/which pwd)
+
+if [[ -z ${_clear} || -z ${_date} || -z ${_head} || -z ${_find} || -z ${_dirname} || -z ${_sed} || -z ${_grep} || -z ${_awk} || -z ${_xargs} || -z ${_sort} || -z ${_ls} || -z ${_tr} || -z ${_wc} || -z ${_basename} || -z ${_tail} || -z ${_pwd} ]]; then
+	echo -e "\n"${bold}${red}"Missing command !!!"${normal}
+	echo -e "Script require these dependencies: "
+	echo -e "\t+ "${bold}"clear date head find dirname sed grep awk xargs sort ls tr wc"${normal}
+	exit 1
+fi
+
+T="$(${_date} +%s)"
+
+__DIR__="$(cd "$(${_dirname} "${0}")"; echo $(${_pwd}))"
+__BASE__="$(${_basename} "${0}")"
+__FILE__="${__DIR__}/${__BASE__}"
+
+ARG1="${1:-Undefined}"
+
+${_clear}
+
+_bash=$(${_head} -n1 $0 | ${_sed} -e 's/#!//g') 
+_bashv=$(${_bash} --version | ${_grep} -Eo "version [0-9]\.[0-9]" )
+
+[[ -z ${_bashv} ]] && echo -e $red$bold"Something went wrong ... line 49 "$normal && exit 1;
+case ${_bashv} in 
+	version\ 3.*)
+		echo -e $red$bold"Bash ${_bashv}, but version 4.2 is required "$normal ; exit 1;;
+	version\ 4.1) 
+		echo -e $yellow$bold"[WARN] >>> Bash ${_bashv}, but version 4.2 is required "$normal;;
+	version\ 4.0) 
+		echo -e $yellow$bold"[WARN] >>> Bash ${_bashv}, but version 4.2 is required "$normal;;
+esac
+
+STATS=0
+DIR=0
+FILE=0
+LIMIT=0
+QUIET=0
+TRAN=0
+
+#LOGPATH='/Users/achmiel/Downloads/chrome'
+#FILENAME='vmkernel.*'
+
+# Execute getopt
+ARGS=$(getopt -o hdomSqcHDANPTf:R:l: -l "help,days,hours,minutes,stats,quiet,scsi_cmd,host_code,device_code,asc_asq,device_id,device_path,translate,file:,directory:,lines:" -- "$@");
+
+#Bad arguments
+if [[ $? -ne 0 ]];
+then
+  echo -e $bold$red"Bad arguments"$default$normal
+  exit 1
+fi
+
+[[ ${#@} -eq 0 ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+
+MFLAG=0
+HFLAG=0
+DFLAG=0
+
+for a in ${ARGS}
+do
+	case ${a} in
+		-h|--help) 
+		  [[ ${#@} -gt 1 ]] && echo -e ${bold}${red}"\nInvalid parameters [ -... ]\n"${normal}
+		  usage
+		;;
+		-m|--minutes)
+		  [[ ${MFLAG} -gt 1 ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+		  MFLAG=$((${MFLAG}+1))
+		;;	
+		-o|--hours)
+		  [[ ${HFLAG} -gt 1 ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+		  HFLAG=$((${HFLAG}+1))
+		;;
+		-d|--days)
+		  [[ ${DFLAG} -gt 1 ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+		  DFLAG=$((${DFLAG}+1))
+		;;
+	esac
+done 
+
+if [[ $((${MFLAG}+${HFLAG}+${DFLAG})) -ne 1 ]]; then 
+	if [[ ${MFLAG} -eq 1 ]]; then
+		ask "Too many time sort criteries...\nWill execute option ${bold}-m|--minutes${normal}." "Do you want correct these arguments ?" answ
+		[[ ${answ} -eq 1 ]] && ARGS=$(echo ${ARGS} | ${_sed} -e 's/--days//g' | ${_sed} -e 's/-d//g' | ${_sed} -e 's/--hours//g' | ${_sed} -e 's/-o//g' ) 
+		HFLAG=0
+	fi
+
+	if [[ ${HFLAG} -eq 1 ]]; then
+		ask "Too many time sort criteries...\nWill execute option ${bold}-o|--hours${normal}." "Do you want correct these arguments ?" answ
+                [[ ${answ} -eq 1 ]] && ARGS=$(echo ${ARGS} | ${_sed} -e 's/--days//g' | ${_sed} -e 's/-d//g' )
+        fi	
+fi
+
+sort_option=
+scsi_cmd=  
+host_code=
+device_code=
+asc_asq=
+device_path=
+device_id=
+
+eval set -- ${ARGS};
+
+while true;
+do
+  case ${1} in
+    -d|--days)
+        sort_option='-k 1.1bn,1.4bn -k 2.1bn,2.2bn -k 3.1bn,3.2bn'
+	shift;
+      ;;
+    -o|--hours)
+         sort_option='-k 1.1bn,1.4bn -k 2.1bn,2.2bn -k 3.1bn,3.2bn -k 4.1bn,4.2bn'
+         shift;
+      ;;
+    -m|--minutes)
+         sort_option="-k 1.1bn,1.4bn -k 2.1bn,2.2bn -k 3.1bn,3.2bn -k 4.1bn,4.2bn -k 5.1bn,5.2bn"
+         shift;
+      ;;
+    -r|--reverse_sort)
+         rev="-r"
+         shift;
+      ;;
+    -S|--stats)
+         shift;
+         STATS=1
+      ;;
+    -q|--quiet)
+         shift;
+         QUIET=1
+      ;;
+    -c|--scsi_cmd)
+	 scsi_cmd="-k 8bd,8bd"
+         shift;
+      ;;
+    -H|--host_code)
+         host_code="-k 11bd,11bd"
+         shift;
+      ;;
+     -D|--device_code)
+         device_code="-k 12bd,12bd"
+         shift;
+      ;;
+     -A|--asc_asq)
+         asc_asq="-k 14bd,14bd -k 15bd,15bd -k 16bd,16bd"
+         shift;
+      ;;
+     -N|--device_id)
+         device_id="-k 9bd,9bd"
+         shift;
+      ;;
+     -P|--device_path)
+         device_path="-k 10bd,10bd"
+         shift;
+      ;;
+     -T|translate)
+	TRAN=1
+	shift
+      ;;
+    -f|--file)
+         FILE=1
+	 FILENAME=${2}
+	 [[ ! -f ${FILENAME} ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+	 shift 2
+      ;;
+    -R|--dir)
+         DIR=1
+	 LOGPATH=${2}	 
+	 [[ ! -d ${LOGPATH} ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+	 shift 2
+      ;;
+    -l|--lines)
+	 LINES=${2}
+	 LIMIT=1
+	 shift 2
+      ;;
+    -h|--help)
+	echo -e ${bold}"USAGE:"${normal}"\n\n"
+        usage
+        shift;
+      ;;
+    --)
+         shift;
+         break;
+      ;;
+  esac
+done
+###################
+
+_find_not_in=$(${_ls} -l / | ${_grep} -E '^d' | ${_grep} -Evi 'var|usr|srv|home|user|media|mnt' | ${_awk} '{print $NF}' | ${_xargs} -n1 -I % echo " -name %" | ${_tr} '\n' ' ')
+
+if [[ ${DIR} -eq 1 ]]; then
+	_files=$(${_find} ${LOGPATH} \! \(${_find_not_in}\) -name "${FILENAME}" -print 2>/dev/null)
+fi
+
+declare -A LOGPATHS
+
+if [[ ${FILE} -eq 1 ]]; then
+	_files=${FILENAME}
+fi
+
+if [[ ${FILE} -eq 0 && ${DIR} -eq 0 ]]; then
+   if [[ ${QUIET} -eq 0 ]]; then
+	${_clear}	
+	printf "You didn't provided any file or directory:\n\t${lblue}-D|--dir${normal} for search directory.\n\t${lblue}-f|--file${normal} for a file.\n\n"
+	ask "Please follow prompt mode or exit on next question." "Do you want to continue ?" answ 
+	echo ''
+	if [[ ${answ} -eq 1 ]]; then
+		printf ${bold}"[ Menu: ]"${normal}"\n"
+		printf "${bold}[ F ]${normal}: vmkernel.log file (with full path)\n"	
+		printf "${bold}[ D ]${normal}: path to directory with vmkernel.logs\n"	
+		printf "${bold}[ S ]${normal}: search for vmkernel.logs, start directory is ${dim}${LOGPATH}${normal}\n"	
+		printf "Default ${bold}[S]${normal} Select one of the options: ${bold}[S][F][D]${normal}: "
+		read -t 30 -n 1 opt
+		echo ''
+		case ${opt} in 
+			f|F) 
+				read -p "- Enter filename with current path: " FILENAME
+				[[ ! -f ${FILENAME} ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+                                printf "Will load file[s] from [${dim}${FILENAME}${normal}].\n"
+			;;
+			d|D) 
+				read -p "- Enter dir: " LOGPATH
+				[[ ! -d ${LOGPATH} ]] && echo -e "\n"${bold}${red}"Invalid parameters [ -... ]\n"${normal} && usage
+				printf "Will start searching for vmkernel.logs at [${dim}${LOGPATH}${normal}].\n"
+			;;
+			*)
+				printf "Will start searching for vmkernel.logs at [${dim}${LOGPATH}${normal}].\n" 
+			;;
+		esac
+	fi
+    fi
+
+    if [[ ${LOGPATH} == "/" ]];
+    then 
+	 echo -e $yellow$bold"Path for vmkernel logs weren't specifaied, we will try find them so that could take long time, please wait or pass the path to files..."$normal
+    fi
+	_files=$(${_find} ${LOGPATH} \! \(${_find_not_in}\) -name "${FILENAME}" -print 2>/dev/null)
+fi
+
+for path in ${_files} ;
+do 
+	LOGPATHS[${path}]=$(${_sed} '/^\s*$/d' ${path} | ${_wc} -l | ${_awk} '{print $1}' )
+done 
+
+if [[ ${#LOGPATHS[@]} -eq 0 ]];
+ then
+  echo -e $red$bold"Couldn't find any vmkernel logs on this machine..."$default$norma  
+  exit 1
+fi 
+
+
+skeys=( $( printf '%s\n' "${!LOGPATHS[@]}" | ${_sort} -t'/' -d ) )
+
+if [[ ${STATS} -eq 1 ]]; 
+then
+######### print loaded files [STATS]
+####
+  lkey=0
+  mkey=0
+
+  chrow=0
+  mchrow=0
+  lsum=0
+  sum=0
+  scsi=0
+  declare -a scsiarr
+
+  for i in ${skeys[@]};
+  do
+    lkey=${#i}
+    [[ ${lkey} -gt ${mkey} ]] && mkey=${lkey}
+    sum=$((${sum}+${LOGPATHS[${i}]}))
+    lsum=$(($(echo "${sum}" | ${_wc} -c)-1))
+    chrow=$(($(echo "${LOGPATHS[${i}]}" | ${_wc} -c)-1))
+    [[ ${chrow} -gt ${mchrow} ]] && mchrow=${chrow}
+    [[ ${lsum} -gt ${mchrow} ]] && mchrow=${lsum}
+    scsiarr+=($(${_grep} -Eic 'cmd.*failed:.*sense data:' ${i} || :))
+  done
+
+  lscsi=$(echo '] -- SCSI CMD: [' | ${_wc} -c)
+  lstr=$(($(echo 'File: [ ' | ${_wc} -c)+${mkey}+$(echo '] --- rows within: [' | ${_wc} -c)+${mchrow}+${lscsi}+${mchrow}+3))
+  str=$( printf "%${lstr}s" )
+
+  echo -e $green"Files loaded: "$normal
+  echo "  ${str// /=}"
+  n=0
+  for i in ${skeys[@]};
+  do
+    if [[ "${scsiarr[${n}]}" -eq 0 ]]; then
+    	printf " ${lcyan}+${normal}${bold}${red}File: [ %-${mkey}s ] --- rows within: [ %-${mchrow}s ] -- SCSI CMD: [ %-${mchrow}s ]${normal}\n" "${i}" "${LOGPATHS[${i}]}" "${scsiarr[${n}]}"
+    else
+    	printf " ${lcyan}+${normal}File: [ %-${mkey}s ] --- rows within: [ %-${mchrow}s ] -- SCSI CMD: [ %-${mchrow}s ]\n" "${i}" "${LOGPATHS[${i}]}" "${scsiarr[${n}]}"
+    fi
+    n=$((${n}+1))
+  done
+
+  echo "  ${str// /=}"
+  printf ${bold}${green}"  Sum: %-$((${lstr}-11-${mchrow}-${lscsi}-${mchrow}))s [ %-${mchrow}s ] %-12s [ %-${mchrow}s ]${normal}\n" " " ${sum} " " $( ${_awk} 'BEGIN {t=0; for (i in ARGV) t+=ARGV[i]; print t}' "${scsiarr[@]}" )
+  echo "  ${str// /=}"
+fi
+#########
+######
+
+declare -A LOGS
+
+counter=0
+for log in "${skeys[@]}";
+do
+	while read -r line;
+	do
+		[[ -z ${line} ]] && continue
+		[[ ${LIMIT} -eq 1 ]] && [[ ${counter} -eq ${LINES} ]] && break
+			 read _day _time _cpu _cmd _dev _path _faild _sens_data <<< $( echo ${line} | ${_awk} '
+                            /^(19|20)[0-9]{2}-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])T([01]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\.[0-9]{3}Z[[:blank:]]?(cpu){1}[0-9]{1,4}:[_a-zA-Z0-9]{1,10}\)?[_a-zA-Z]{2,14}:[[:blank:]]?.*(Failed:){1}/ 
+			  {
+                                split($1,tstamp,"T") ;
+                                print tstamp[1]" "substr(tstamp[2], 0, length(tstamp[2])-1) ;
+                                print $2;
+                                print $5;
+                                print $10;
+                                print $13;
+                                print $15"-"$16"-"$17;
+                                print $21" "$22" "$23;
+                          }')
+		LOGS[$counter,'day']="$(echo ${_day} | ${_sed} -e 's/-/ /g')"
+		LOGS[$counter,'time']="$(echo ${_time} | ${_sed} -e 's/:/ /g')"
+		LOGS[$counter,'cpu']="${_cpu%)*}" 
+		[[ ${TRAN} -eq 0 ]] && LOGS[$counter,'cmd']="${_cmd}" || LOGS[$counter,'cmd']=$(scsi_cmd ${_cmd})
+		LOGS[$counter,'dev']=$(echo "${_dev}" | ${_sed} -e 's/"//g' )
+		LOGS[$counter,'path']=$(echo "${_path}" | ${_sed} -e 's/"//g' )
+		[[ ${TRAN} -eq 0 ]] && LOGS[$counter,'failed']=$(echo "${_faild}" | ${_sed} -e 's/[HDP:]//g' | ${_tr} '-' ' ') || LOGS[$counter,'failed']=$( scsi_code "$(echo "${_faild}" | ${_sed} -e 's/[HDP:]//g' | ${_tr} '-' ' ' | ${_awk} '{print $1" "$2}')") 
+		[[ ${TRAN} -eq 0 ]] && LOGS[$counter,'sens_data']=${_sens_data%?} || LOGS[$counter,'sens_data']=$(sense_data $(echo ${_sens_data%?} | ${_sed} -e 's/ /-/g'))
+		LOGS[$counter,'file']="${log}"
+
+	let ++counter
+	done < <(${_grep} -Ei 'cmd.*failed:.*sense data:' ${log} || :)
+done 
+
+if [[ ${TRAN} -eq 1 ]]; then 
+######
+	[[ ! -z ${asc_asq} ]] && asc_asq="-k 13bd,13bd"
+	printf ${inv}${blblue}${bold}"%-10s %-12s %-20s %-36s %-45s %-25s %-43s %-65s ${normal}\n" "YYYY MM DD" "HH MM ss.ms" "CPU:NUM" "SCSi Cmd" "toDevice" "onPath" "[Host] [Device] Failed" "ASC and ASQ"
+	
+	for (( j=0 ; j<${counter}; j++ ));
+	do
+          printf "${blgray}%-10s %-12s %-20s %-36s %-45s %-25s %-43s %-65s ${normal}\n" "${LOGS[$j,'day']}" "${LOGS[$j,'time']}" "${LOGS[$j,'cpu']}" "${LOGS[$j,'cmd']}" "${LOGS[$j,'dev']}" "${LOGS[$j,'path']}" "${LOGS[$j,'failed']}" "${LOGS[$j,'sens_data']}"
+        done | ${_sort} ${sort_option} ${scsi_cmd} ${device_id} ${device_path} ${host_code} ${device_code} ${asc_asq} -S 75%
+
+	printf ${inv}${blblue}${bold}"%-10s %-12s %-20s %-36s %-45s %-25s %-43s %-65s ${normal}\n" "YYYY MM DD" "HH MM ss.ms" "CPU:NUM" "SCSi Cmd" "toDevice" "onPath" "[Host] [Device] Failed" "ASC and ASQ"
+######	
+else 
+######
+	printf ${inv}${blblue}${bold}"%-10s  %-12s  %-20s  %-10s  %-45s  %-25s  %-25s  %-25s  %-65s ${normal}\n" "YYYY MM DD" "HH MM ss.ms" "CPU:NUM" "SCSi Cmd" "toDevice" "onPath" "[H] [D] [P] Failed" "ASC and ASQ" "File path"
+
+	for (( j=0 ; j<${counter}; j++ ));
+	do
+	  printf "${blgray}%-10s  %-12s  %-20s  %-10s  %-45s  %-25s  %-25s  %-25s  %-65s ${normal}\n" "${LOGS[$j,'day']}" "${LOGS[$j,'time']}" "${LOGS[$j,'cpu']}" "${LOGS[$j,'cmd']}" "${LOGS[$j,'dev']}" "${LOGS[$j,'path']}" "${LOGS[$j,'failed']}" "${LOGS[$j,'sens_data']}" "${LOGS[$j,'file']}"
+	done | ${_sort} ${sort_option} ${scsi_cmd} ${device_id} ${device_path} ${host_code} ${device_code} ${asc_asq} -S 75%
+
+	printf ${inv}${blblue}${bold}"%-10s  %-12s  %-20s  %-10s  %-45s  %-25s  %-25s  %-25s  %-65s ${normal}\n" "YYYY MM DD" "HH MM ss.ms" "CPU:NUM" "SCSi Cmd" "toDevice" "onPath" "[H] [D] [P] Failed " "ASC and ASQ" "File path"
+######
+fi
+
+echo ''
+echo ''
+#####
+T="$(($(${_date} +%s)-T))"
+printf ${blblue}${bold}"Time: %02d:%02d:%02d:%02d ${normal}\n" "$((T/86400))" "$((T/3600%24))" "$((T/60%60))" "$((T%60))"

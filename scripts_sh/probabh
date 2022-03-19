@@ -1,0 +1,17 @@
+#!/bin/bash
+# date +'log_%Y_%m_%d_%H_%M.txt'
+
+if [ $1 ] 
+	then
+ 		date +'komendy_%d_%m_%Y_%H_%M.txt'
+	else
+		echo nic nie dali na wejscie
+fi
+
+data=$(date +'komendy_%d/%m/%Y-%H:%M.txt')
+# uwazac na spacje zmienna=$(inny skrypt)
+echo $data
+#sudo cat /home/nonus25/.bash_history > /home/nonus25/$data
+#sudo chmod 600 /home/nonus25/cmd/$data
+echo skopiowano... 'do' pliku $data
+

@@ -1,0 +1,12 @@
+#!/bin/bash -
+
+var1=TesT
+var2=tEst
+
+echo ${var1,,} ${var2,,}
+echo ${var1^^} ${var2^^}
+
+if [[ ${var1^^} == 'TEST' ]]
+then
+	echo "text is the same"
+fi

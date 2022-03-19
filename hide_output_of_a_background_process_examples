@@ -1,0 +1,112 @@
+#!/usr/local/env bash
+#### as a interesting thing there is trick to start popup window from terminal
+
+#	alias alertme="xmessage Alert!"
+#	alertme 
+
+#### command `alertme` will open new popup window from terminal :)
+
+#### defining the JOB 
+
+	alias alertme="echo 'Alert!' ; sleep 3; echo 'Wake up'"
+
+#### calling the script via alias name
+	
+	alertme
+
+####	Testing the output of the script 
+####	Output:
+#### 		Alert!
+####			.... after sleep finish 
+####		Wake up
+
+#### putting job into background of the system with hidden syatem messages
+#### like process id (pid) and the number of the job 
+#### ex. what is going to be invisable 
+####	[1] 9132
+####		and as we know when the job finish system its logging this info like below
+####	[1]  + 9132 done       echo 'Wake up'
+#### and we dont wanna see these messages ... in this case we need to execute the background job like below
+
+	( alertme & )
+
+#### This will only print us the messages to the screen like we had with the 1st test above
+####    Output:
+####            Alert!
+####                    .... after sleep finish
+####            Wake up
+	
+#### Whereas this command will log to screen all system messages and output 
+	
+	alertme &
+
+#### In the order as showing in the comments below
+####	Output: 
+####		Alert!
+####		[1] 9132
+####		Wake up
+#### 		[1]  + 9132 done       echo 'Wake up'
+
+#### If commad also produces some output to STDOUT and/or STDERR, pipe those to /dev/null: if we dont wanna see them
+#### To not send any message to STD 
+
+	( alertme & ) > /dev/null 2>&1
+
+####	No Output at all 
+
+#### A slightly neater version of another answer here:
+	
+	( alertme > /dev/null 2>&1 & )
+
+#### Above command  will only print us the first messages
+####    Output:
+####            Alert!
+####                    .... after sleep finish
+
+	(&>/dev/null alertme &)
+
+#### This will only print us the last messages 
+####    Output:
+####                    .... after sleep finish
+####            Wake up
+
+
+#### Using `disown` or `&!` which have same result as `nohup` 
+#### example with `disown`
+
+	alertme & disown
+
+#### In bash or zsh, you can call 
+####
+####		`disown %1`
+####
+#### to tell the shell to forget about the job. 
+#### Then the shell won't print any message about that job, nor will it show it when you run jobs or ever send a SIGHUP to it. 
+#### In zsh, starting the job with `&!` instead of `&` is equivalent to calling `disown` on it immediately.
+
+
+#### As additional info:
+#### When you use &, the process is running in background. But its standard output is still the terminal.
+#### 
+#### In fact, you may run
+####
+####		`ping 8.8.8.8 &` 
+####
+#### and 
+####
+####		`find / -name '*test*' &` 
+####
+#### at the same time (resulting in a mixed output), but you may not run both of above commands at the same time on the same shell.
+#### 
+#### If you don't want to see anything, use something like:
+####
+####		`ping 8.8.8.8 &> /dev/null &`
+#### 
+#### Additionally, you may want to learn about 
+####		nohup 
+#### and 
+####		disown
+####
+#### IMPORTANT !!! 
+####	`disown` ---  doesn't prevent output from being printed to the terminal.
+

@@ -1,0 +1,5 @@
+#!/bin/bash
+
+alias_scope='-alias default -scopeName dupa'
+
+echo "print AdminTask.getSSLConfig('[${alias_scope}]')"

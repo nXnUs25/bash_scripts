@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+WINDOWS_SERVERS="stmconvnode1 stmrennode1 stmconvnode2 stmconvnode3"
+
+if [ $# -eq 0 ]; then
+	echo " u need to pass at lease one param"
+	exit 0
+fi
+
+
+USER='administrator'
+PASSWD='warm.n0t'
+
+
+
+for x in "${@}"
+do
+	IP="${x}"
+	SERVER="-U ${USER}%${PASSWD} //${IP}"  
+        echo "[Host: ${x}] winexe $SERVER"
+done

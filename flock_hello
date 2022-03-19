@@ -1,0 +1,31 @@
+#!/bin/bash
+ 
+#set -e
+
+#trap "rm -vf ${lock}" SIGINT
+#trap "rm -vf ${lock}" EXIT 
+skip=1
+scriptname=$(basename $0)
+lock="./${scriptname}.lock"
+trap "rm -f ${lock}" EXIT SIGINT
+ 
+echo "[DEBUG] skip: [ ${skip} ]"
+
+exec 200>$lock || skip=0
+ 
+## The code:
+
+echo "[DEBUG] skip: [ ${skip} ]"
+
+if [ ${skip} -eq 1 ];
+then
+	flock -n 200 || echo "dupa"
+	pid=$$
+	echo $pid 1>&200
+	echo "sleep for 60"
+	sleep 60
+	echo "Hello world"
+else 
+	echo "Already running..."
+fi
+	

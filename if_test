@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+if [ -z ${1} ] || [ $@ == 0 ]; then
+	echo -e "*  Usage:\n*\tThis script its testing IF statment for \$?, and you need to pass one argument\n*\tex. if_test zsh\n*\tNow if your current shell its zsh you will get 0 as this process was found"
+	exit 1
+fi
+
+
+## variable to check err exit code from last command its $?
+## 0 == command was successful 
+## 1 == command wasnt successful
+
+## always use echo -e for displaying \t \n and other special signs
+
+result=$(ps | grep ${1})
+err=$?
+
+echo -e "*  There is two IF statments:\n*   - 1st condition is:\n*\tif [ \$? ]; ...\n*   - 2nd condition is:\n*\tif [ \$? == 0 ]; ...\n*   And if the condition fails the ELSE block should be executed\n\n"
+
+echo -e "###  1st IF statment:\n"
+if [ $err ]; then
+	echo -e "  ###  \$?: $err == true == 0"
+else
+	echo -e "  ###  \$?: $err == false == 1"
+fi 
+
+echo -e "\n### 2nd IF statment:\n"
+if [ $err == 0 ]; then
+        echo -e "  ###  \$?: $err == true == 0"
+else
+	echo -e "  ###  \$?: $err == false == 1"
+fi
+
+
+echo -e "\n*  ps command output:\n*${result}"
+exit 1
+
+if [ -d "$DIRECTORY" ]; then
+	  # Control will enter here if $DIRECTORY exists.
+fi
+##  Or to check if a directory doesn't exist:
+
+if [ ! -d "$DIRECTORY" ]; then
+	    # Control will enter here if $DIRECTORY doesn't exist.
+fi
